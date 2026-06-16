@@ -1114,8 +1114,8 @@ function notif(n,body,icon){
 }
 
 /* ── LINE NOTIFY via n8n ── */
-// ⚠️ อัพเดท URL นี้ทุกครั้งที่ restart ngrok: ngrok http 5678
-const N8N_WEBHOOK='https://relive-dastardly-fantastic.ngrok-free.dev/webhook/timebox';
+// VPS Hetzner - n8n รันถาวร 24/7 ไม่ต้องพึ่ง ngrok แล้ว
+const N8N_WEBHOOK='http://5.223.42.72:5678/webhook/timebox';
 function sendLineNotify(message){
   fetch(N8N_WEBHOOK,{
     method:'POST',
@@ -1671,3 +1671,4 @@ if(!rk||!rk.morning)document.getElementById('ritual-strip').classList.add('show'
 </script>
 </body>
 </html>
+ "Update webhook to VPS" 
