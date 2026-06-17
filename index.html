@@ -717,6 +717,7 @@ const MS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec
 const SH=6,EH=23,HH=56; // start hour, end hour, hour height px
 
 let blocks=[],cats=[],refls=[],timers={};
+let _localTombstones={}; // เก็บ id ที่ลบไปแล้วในเครื่องนี้ ป้องกัน polling เอาของที่ลบไปแล้วกลับมา
 let selCat='',selColor=PAL[0],editId=null,themePref='auto';
 let vDate=new Date(),mCalDate=new Date(),mSelDate=dk();
 
@@ -775,8 +776,23 @@ function load(){
       {id:5,name:'Gym session',cat:'health',date:t,start:'17:30',end:'18:30',note:'Leg day',done:false,running:false,elapsed:0},
     ];
   }
-  blocks.forEach(b=>{b.running=false;if(!b.note)b.note='';if(!b.date)b.date=dk();});
+  blocks.forEach(b=>{if(!b.note)b.note='';if(!b.date)b.date=dk();});
   if(cats.length)selCat=cats[0].id;
+  // resume timer ถ้ามี block กำลัง running อยู่ (เช่น sync มาจากอีกเครื่องที่กด Start ไว้)
+  blocks.forEach(b=>{
+    if(b.running&&b.startedAt&&!timers[b.id]){
+      timers[b.id]=setInterval(()=>{
+        const liveElapsed=b.elapsed+Math.floor((Date.now()-b.startedAt)/1000);
+        updateFocus(b,liveElapsed);
+        if(liveElapsed>=tsec(b)){
+          b.elapsed=tsec(b);b.running=false;b.startedAt=null;
+          clearInterval(timers[b.id]);delete timers[b.id];hideFocus();
+          saveB();renderAll();
+        }
+      },1000);
+      showFocus(b);
+    }
+  });
 }
 function saveB(){try{localStorage.setItem(BK,JSON.stringify(blocks));}catch(e){}queueSyncToCloud();}
 function saveC(){try{localStorage.setItem(CK,JSON.stringify(cats));}catch(e){}queueSyncToCloud();}
@@ -839,7 +855,8 @@ function renderTaskList(){
     </div>`;
   const cards=db.map(b=>{
     const cat=gcat(b.cat);
-    const rem=Math.max(tsec(b)-b.elapsed,0);
+    const liveEl=b.running&&b.startedAt?b.elapsed+Math.floor((Date.now()-b.startedAt)/1000):b.elapsed;
+    const rem=Math.max(tsec(b)-liveEl,0);
     const dur=fmins(tsec(b));
     return`<div class="task-card${b.running?' running':''}${b.done?' done':''}" onclick="openBlockMenu(${b.id})">
       <div class="task-check" onclick="event.stopPropagation();toggleDone(${b.id})">
@@ -1080,24 +1097,36 @@ function toggleDone(id){const b=blocks.find(x=>x.id===id);if(!b)return;if(b.done
 
 function toggleTimer(id){
   const b=blocks.find(x=>x.id===id);if(!b||b.done)return;
-  if(b.running){b.running=false;clearInterval(timers[id]);delete timers[id];hideFocus();}
+  if(b.running){
+    // PAUSE: คำนวณ elapsed จริงจาก startedAt แล้วหยุด ไม่ sync ทุกวินาทีอีกต่อไป
+    if(b.startedAt){b.elapsed+=Math.floor((Date.now()-b.startedAt)/1000);b.startedAt=null;}
+    b.running=false;clearInterval(timers[id]);delete timers[id];hideFocus();
+    saveB();renderAll();
+  }
   else{
-    blocks.forEach(x=>{if(x.running){x.running=false;clearInterval(timers[x.id]);delete timers[x.id];}});
-    b.running=true;showFocus(b);
+    blocks.forEach(x=>{
+      if(x.running){
+        if(x.startedAt){x.elapsed+=Math.floor((Date.now()-x.startedAt)/1000);x.startedAt=null;}
+        x.running=false;clearInterval(timers[x.id]);delete timers[x.id];
+      }
+    });
+    b.running=true;b.startedAt=Date.now();showFocus(b);
     sendLineNotify(`▶️ เริ่ม: ${b.name} (${b.start}–${b.end})`);
+    saveB(); // sync จุดนี้ครั้งเดียวตอนกด Start พร้อม startedAt — ไม่ต้อง sync ทุกวินาทีอีก
     timers[id]=setInterval(()=>{
-      b.elapsed++;updateFocus(b);
-      if(b.elapsed>=tsec(b)){
-        b.elapsed=tsec(b);b.running=false;
+      const liveElapsed=b.elapsed+Math.floor((Date.now()-b.startedAt)/1000);
+      updateFocus(b,liveElapsed);
+      if(liveElapsed>=tsec(b)){
+        b.elapsed=tsec(b);b.running=false;b.startedAt=null;
         clearInterval(timers[id]);delete timers[id];hideFocus();
         if(notifPrefs.onEnd)notif(`✅ Done: ${b.name}`,`"${b.name}" time block is complete!`);
         sendLineNotify(`✅ เสร็จ: ${b.name}`);
         if('vibrate'in navigator)navigator.vibrate([200,100,200]);
+        saveB();renderAll();
       }
-      saveB();renderAll();
     },1000);
+    renderAll();
   }
-  saveB();renderAll();
 }
 function markDone(id){
   const b=blocks.find(x=>x.id===id);if(!b)return;
@@ -1107,7 +1136,12 @@ function markDone(id){
   checkEvening();
 }
 function undoDone(id){const b=blocks.find(x=>x.id===id);if(!b)return;b.done=false;saveB();renderAll();}
-function deleteBlock(id){if(timers[id]){clearInterval(timers[id]);delete timers[id];}blocks=blocks.filter(x=>x.id!==id);saveB();renderAll();}
+function deleteBlock(id){
+  if(timers[id]){clearInterval(timers[id]);delete timers[id];}
+  blocks=blocks.filter(x=>x.id!==id);
+  _localTombstones[String(id)]=true;
+  saveB();renderAll();
+}
 function notif(n,body,icon){
   if(Notification.permission==='granted'){
     new Notification(n,{body:body||'',icon:'/icon-192.png',badge:'/icon-192.png',tag:n});
@@ -1118,21 +1152,21 @@ function notif(n,body,icon){
 // VPS Hetzner + DuckDNS + Let's Encrypt SSL - HTTPS ถาวร ไม่ต้องพึ่ง ngrok แล้ว
 const N8N_WEBHOOK='https://bournbhrom-n8n.duckdns.org/webhook/timebox';
 
-/* ── CLOUD SYNC (Postgres + PostgREST) ── */
-const SYNC_API='https://bournbhrom-n8n.duckdns.org/api/blocks';
-const SYNC_ID='timebox-main'; // บัญชีเดียว ใช้ id คงที่ตัวเดียว
-const SK='tb_sync_ts_v1'; // เก็บ timestamp ล่าสุดที่ sync สำเร็จ
+/* ── CLOUD SYNC (Postgres + PostgREST) — per-block sync, รองรับลบ/แก้พร้อมกันหลายเครื่อง ── */
+const SYNC_BASE='https://bournbhrom-n8n.duckdns.org/api';
+const META_ID='timebox-main'; // บัญชีเดียว ใช้ id คงที่ตัวเดียวสำหรับ cats/refls
 let _syncTimer=null;
 let _syncing=false;
+let _lastPollAt=0; // เวลาที่ poll ล่าสุด ใช้กรอง record ที่เปลี่ยนใหม่กว่านี้เท่านั้น
 
 function syncStatusEl(){return document.getElementById('sync-status');}
 function setSyncStatus(text){const el=syncStatusEl();if(el)el.textContent=text;}
 
-// ส่งข้อมูลทั้งหมดขึ้น cloud (debounced เพื่อไม่ยิงถี่เกินไป)
+// ส่งข้อมูลทั้งหมดขึ้น cloud แบบ per-block (debounced เพื่อไม่ยิงถี่เกินไป)
 function queueSyncToCloud(){
   if(_syncTimer)clearTimeout(_syncTimer);
   setSyncStatus('Saving…');
-  _syncTimer=setTimeout(syncToCloud,1500);
+  _syncTimer=setTimeout(syncToCloud,1200);
 }
 
 async function syncToCloud(){
@@ -1140,58 +1174,107 @@ async function syncToCloud(){
   _syncing=true;
   try{
     const now=new Date().toISOString();
-    const payload={id:SYNC_ID,data:{blocks,cats,refls},updated_at:now};
-    const res=await fetch(SYNC_API,{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'Prefer':'resolution=merge-duplicates'
-      },
-      body:JSON.stringify(payload)
-    });
-    if(res.ok){
-      localStorage.setItem(SK,String(new Date(now).getTime()));
-      setSyncStatus('Synced ✓');
-    }else{
-      setSyncStatus('Sync failed');
+    // 1) sync แต่ละ block เป็น row ของตัวเอง (upsert)
+    const rows=blocks.map(b=>({id:String(b.id),block:b,deleted:false,updated_at:now}));
+    if(rows.length){
+      await fetch(`${SYNC_BASE}/tb_blocks`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},
+        body:JSON.stringify(rows)
+      });
     }
+    // 2) sync tombstones (block ที่ถูกลบ) ให้เครื่องอื่นรู้ว่าต้องลบด้วย
+    const tombIds=Object.keys(_localTombstones);
+    if(tombIds.length){
+      const tombRows=tombIds.map(id=>({id,block:{id},deleted:true,updated_at:now}));
+      await fetch(`${SYNC_BASE}/tb_blocks`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},
+        body:JSON.stringify(tombRows)
+      });
+    }
+    // 3) sync cats/refls (ก้อนเดียว เปลี่ยนไม่บ่อย ไม่ค่อยชนกัน)
+    await fetch(`${SYNC_BASE}/tb_meta`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},
+      body:JSON.stringify({id:META_ID,cats,refls,updated_at:now})
+    });
+    setSyncStatus('Synced ✓');
   }catch(e){setSyncStatus('Offline (saved locally)');}
   finally{_syncing=false;}
 }
 
-// ดึงข้อมูลจาก cloud ตอนเปิดแอป แล้วเทียบเวลากับ local เลือกตัวใหม่กว่า
+// ดึงข้อมูลทั้งหมดจาก cloud มา merge แบบ per-block (ใช้ตอนเปิดแอปครั้งแรก)
 async function syncFromCloud(){
   try{
     setSyncStatus('Checking sync…');
-    const res=await fetch(`${SYNC_API}?id=eq.${SYNC_ID}`,{headers:{'Accept':'application/json'}});
-    if(!res.ok){setSyncStatus('Offline (using local)');return;}
-    const rows=await res.json();
-    if(!rows.length){
+    const [blocksRes,metaRes]=await Promise.all([
+      fetch(`${SYNC_BASE}/tb_blocks`,{headers:{'Accept':'application/json'}}),
+      fetch(`${SYNC_BASE}/tb_meta?id=eq.${META_ID}`,{headers:{'Accept':'application/json'}})
+    ]);
+    if(!blocksRes.ok){setSyncStatus('Offline (using local)');return;}
+    const cloudRows=await blocksRes.json();
+    if(!cloudRows.length){
       // ยังไม่มีข้อมูลบน cloud เลย — ส่ง local ขึ้นไปครั้งแรก
       await syncToCloud();
+      _lastPollAt=Date.now();
       return;
     }
-    const cloud=rows[0];
-    const cloudTime=new Date(cloud.updated_at).getTime();
-    const localTime=parseInt(localStorage.getItem(SK)||'0',10);
-    if(cloudTime>localTime){
-      // cloud ใหม่กว่า → ใช้ข้อมูล cloud แทน
-      if(cloud.data){
-        blocks=cloud.data.blocks||blocks;
-        cats=cloud.data.cats||cats;
-        refls=cloud.data.refls||refls;
-        saveB();saveC();saveR();
-        localStorage.setItem(SK,String(cloudTime));
+    mergeCloudBlocks(cloudRows);
+    if(metaRes.ok){
+      const metaRows=await metaRes.json();
+      if(metaRows.length&&metaRows[0]){
+        if(metaRows[0].cats&&metaRows[0].cats.length)cats=metaRows[0].cats;
+        if(metaRows[0].refls)refls=metaRows[0].refls;
+        saveCLocal();saveRLocal();
       }
-      setSyncStatus('Synced ✓ (updated from cloud)');
-      renderAll();
-    }else{
-      setSyncStatus('Synced ✓');
     }
+    setSyncStatus('Synced ✓');
+    renderAll();
+    _lastPollAt=Date.now();
   }catch(e){
     setSyncStatus('Offline (using local)');
   }
 }
+
+// merge cloud rows เข้ากับ blocks ในเครื่อง: ลบที่ถูก tombstone, เพิ่ม/แทนที่ตัวที่ cloud ใหม่กว่า
+function mergeCloudBlocks(cloudRows){
+  const localById={};
+  blocks.forEach(b=>{localById[String(b.id)]=b;});
+  cloudRows.forEach(row=>{
+    if(row.deleted){
+      // ถูกลบจากเครื่องอื่น → ลบออกจากเครื่องนี้ด้วย (เว้นแต่กำลังรัน timer อยู่ ป้องกัน race condition ตัวเอง)
+      const existing=localById[row.id];
+      if(existing&&timers[existing.id]){clearInterval(timers[existing.id]);delete timers[existing.id];}
+      delete localById[row.id];
+    }else if(row.block){
+      const existing=localById[row.id];
+      // ถ้า local กำลัง running timer อยู่ ไม่ทับด้วยข้อมูล cloud (กัน timer กระตุก)
+      if(existing&&existing.running)return;
+      localById[row.id]=row.block;
+    }
+  });
+  blocks=Object.values(localById);
+  saveBLocal();
+}
+
+// poll หาความเปลี่ยนแปลงจากเครื่องอื่นเป็นระยะ (ไม่ sync ขึ้น แค่ดึงลงมา merge)
+async function pollCloud(){
+  if(_syncing)return;
+  try{
+    const res=await fetch(`${SYNC_BASE}/tb_blocks`,{headers:{'Accept':'application/json'}});
+    if(!res.ok)return;
+    const cloudRows=await res.json();
+    mergeCloudBlocks(cloudRows);
+    renderAll();
+  }catch(e){/* เงียบไว้ ไม่ต้องโชว์ error ตอน background poll */}
+}
+setInterval(pollCloud,8000);
+
+// บันทึก localStorage เฉยๆ ไม่ trigger sync ซ้ำ (ใช้ตอน merge จาก cloud)
+function saveBLocal(){try{localStorage.setItem(BK,JSON.stringify(blocks));}catch(e){}}
+function saveCLocal(){try{localStorage.setItem(CK,JSON.stringify(cats));}catch(e){}}
+function saveRLocal(){try{localStorage.setItem(RK,JSON.stringify(refls));}catch(e){}}
 function sendLineNotify(message){
   fetch(N8N_WEBHOOK,{
     method:'POST',
@@ -1266,7 +1349,7 @@ function _notifFired(k){return _fired.has(k);}
 function _markNotifFired(k){_fired.add(k);try{sessionStorage.setItem('tb_notif_fired',JSON.stringify([..._fired]));}catch(e){}}
 
 function showFocus(b){document.getElementById('focus-name').textContent=b.name;updateFocus(b);document.getElementById('focus-strip').classList.add('show');}
-function updateFocus(b){document.getElementById('focus-timer').textContent=fmt(Math.max(tsec(b)-b.elapsed,0));}
+function updateFocus(b,liveElapsed){document.getElementById('focus-timer').textContent=fmt(Math.max(tsec(b)-(liveElapsed!=null?liveElapsed:b.elapsed),0));}
 function hideFocus(){document.getElementById('focus-strip').classList.remove('show');}
 function endFocus(){const r=blocks.find(b=>b.running);if(r)toggleTimer(r.id);}
 
@@ -1736,6 +1819,7 @@ document.querySelectorAll('.bnav-btn').forEach(btn=>{
 });
 
 setInterval(()=>{if(document.getElementById('view-main').classList.contains('active'))renderTimeGrid();},30*1000);
+setInterval(()=>{if(blocks.some(b=>b.running))renderAll();},1000);
 setInterval(()=>{if(themePref==='auto')applyTheme();},5*60*1000);
 
 load();loadNotifPrefs();applyTheme();renderAll();renderSwatches();
