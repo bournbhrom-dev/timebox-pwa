@@ -955,6 +955,7 @@ function renderTimeGrid(){
         b.start=mtos(Math.max(newStartMin,SH*60));
         b.end=mtos(Math.min(newEndMin,(EH+1)*60));
         blocks.sort((a,c)=>a.date.localeCompare(c.date)||a.start.localeCompare(c.start));
+        syncBlockToCalendar(b,false);
         saveB();renderAll();
       }
       _drag={active:false,id:null,startY:0,startMin:0,origStart:'',origEnd:'',origDate:''};
@@ -1140,6 +1141,7 @@ function deleteBlock(id){
   if(timers[id]){clearInterval(timers[id]);delete timers[id];}
   blocks=blocks.filter(x=>x.id!==id);
   _localTombstones[String(id)]=true;
+  syncBlockToCalendar({id},true);
   saveB();renderAll();
 }
 function notif(n,body,icon){
@@ -1151,6 +1153,7 @@ function notif(n,body,icon){
 /* ── LINE NOTIFY via n8n ── */
 // VPS Hetzner + DuckDNS + Let's Encrypt SSL - HTTPS ถาวร ไม่ต้องพึ่ง ngrok แล้ว
 const N8N_WEBHOOK='https://bournbhrom-n8n.duckdns.org/webhook/timebox';
+const N8N_SYNC_WEBHOOK='https://bournbhrom-n8n.duckdns.org/webhook/timebox-sync';
 
 /* ── CLOUD SYNC (Postgres + PostgREST) — per-block sync, รองรับลบ/แก้พร้อมกันหลายเครื่อง ── */
 const SYNC_BASE='https://bournbhrom-n8n.duckdns.org/api';
@@ -1280,6 +1283,19 @@ function sendLineNotify(message){
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({message:message})
+  }).catch(()=>{});
+}
+
+/* ── GOOGLE CALENDAR SYNC via n8n (one-way: TimeBox → Calendar) ── */
+function toISO(dateKey,timeStr){return `${dateKey}T${timeStr}:00+07:00`;}
+function syncBlockToCalendar(block,deleted){
+  const payload=deleted
+    ? {block_id:String(block.id),deleted:true}
+    : {block_id:String(block.id),title:block.name,start:toISO(block.date,block.start),end:toISO(block.date,block.end),deleted:false};
+  fetch(N8N_SYNC_WEBHOOK,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
   }).catch(()=>{});
 }
 
@@ -1644,11 +1660,12 @@ function saveBlock(){
   const repeat=_selRepeat||'none';
   if(editId){
     const b=blocks.find(x=>x.id===editId);
-    if(b){b.name=name;b.cat=selCat;b.start=start;b.end=end;b.note=note;b.repeat=repeat;}
+    if(b){b.name=name;b.cat=selCat;b.start=start;b.end=end;b.note=note;b.repeat=repeat;syncBlockToCalendar(b,false);}
   } else {
     const newB={id:Date.now(),name,cat:selCat,date:targetDate,start,end,note,repeat,done:false,running:false,elapsed:0};
     blocks.push(newB);
     if(repeat!=='none'){newB.repeat=repeat;generateRecurring(newB);}
+    syncBlockToCalendar(newB,false);
   }
   blocks.sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start));
   saveB();closeSheet();
