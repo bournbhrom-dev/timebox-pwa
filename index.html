@@ -955,8 +955,8 @@ function renderTimeGrid(){
         b.start=mtos(Math.max(newStartMin,SH*60));
         b.end=mtos(Math.min(newEndMin,(EH+1)*60));
         blocks.sort((a,c)=>a.date.localeCompare(c.date)||a.start.localeCompare(c.start));
-        syncBlockToCalendar(b,false);
-        saveB();renderAll();
+        saveBLocal();renderAll();
+        syncBlockToCalendar(b,false).then(saveB);
       }
       _drag={active:false,id:null,startY:0,startMin:0,origStart:'',origEnd:'',origDate:''};
     });
@@ -1288,15 +1288,24 @@ function sendLineNotify(message){
 
 /* ── GOOGLE CALENDAR SYNC via n8n (one-way: TimeBox → Calendar) ── */
 function toISO(dateKey,timeStr){return `${dateKey}T${timeStr}:00+07:00`;}
-function syncBlockToCalendar(block,deleted){
+async function syncBlockToCalendar(block,deleted){
   const payload=deleted
     ? {block_id:String(block.id),deleted:true}
     : {block_id:String(block.id),title:block.name,start:toISO(block.date,block.start),end:toISO(block.date,block.end),deleted:false};
-  fetch(N8N_SYNC_WEBHOOK,{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(payload)
-  }).catch(()=>{});
+  try{
+    const res=await fetch(N8N_SYNC_WEBHOOK,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    if(!res.ok)return;
+    const data=await res.json().catch(()=>null);
+    // เก็บ gcal_event_id กลับเข้า local state ทันที กัน sync รอบถัดไปทับหาย
+    if(data&&data.gcal_event_id&&!deleted){
+      const b=blocks.find(x=>String(x.id)===String(block.id));
+      if(b)b.gcal_event_id=data.gcal_event_id;
+    }
+  }catch(e){/* offline หรือ n8n ไม่ตอบ — เงียบไว้ ไม่บล็อก UI */}
 }
 
 /* ── NOTIFICATION SCHEDULER ── */
@@ -1658,19 +1667,23 @@ function saveBlock(){
   if(!selCat&&cats.length)selCat=cats[0].id;
   const targetDate=_sheetDate||dk(vDate);
   const repeat=_selRepeat||'none';
+  let pendingSync=null;
   if(editId){
     const b=blocks.find(x=>x.id===editId);
-    if(b){b.name=name;b.cat=selCat;b.start=start;b.end=end;b.note=note;b.repeat=repeat;syncBlockToCalendar(b,false);}
+    if(b){b.name=name;b.cat=selCat;b.start=start;b.end=end;b.note=note;b.repeat=repeat;pendingSync=syncBlockToCalendar(b,false);}
   } else {
     const newB={id:Date.now(),name,cat:selCat,date:targetDate,start,end,note,repeat,done:false,running:false,elapsed:0};
     blocks.push(newB);
     if(repeat!=='none'){newB.repeat=repeat;generateRecurring(newB);}
-    syncBlockToCalendar(newB,false);
+    pendingSync=syncBlockToCalendar(newB,false);
   }
   blocks.sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start));
-  saveB();closeSheet();
+  // เซฟ local + render ทันที ไม่รอ network — UI ต้องไม่ค้าง
+  saveBLocal();closeSheet();
   if(targetDate!==dk(vDate)){vDate=dtd(targetDate);}
   renderAll();
+  // sync ขึ้น cloud หลัง gcal_event_id (ถ้ามี) ถูกเขียนเข้า local state แล้วเท่านั้น กันทับหาย
+  if(pendingSync){pendingSync.then(saveB);}else{saveB();}
 }
 
 const NK='tb_notif_prefs_v1';
