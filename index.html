@@ -1289,15 +1289,26 @@ function sendLineNotify(message){
 
 /* ── GOOGLE CALENDAR SYNC via n8n (one-way: TimeBox → Calendar) ── */
 function toISO(dateKey,timeStr){return `${dateKey}T${timeStr}:00+07:00`;}
-function syncBlockToCalendar(block,deleted){
+async function syncBlockToCalendar(block,deleted){
   const payload=deleted
     ? {block_id:String(block.id),deleted:true}
     : {block_id:String(block.id),title:block.name,start:toISO(block.date,block.start),end:toISO(block.date,block.end),deleted:false};
-  fetch(N8N_SYNC_WEBHOOK,{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(payload)
-  }).catch(()=>{});
+  try{
+    const res=await fetch(N8N_SYNC_WEBHOOK,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    if(!res.ok)return;
+    // รับ gcal_event_id กลับมาเก็บใน block (เฉพาะ create/update)
+    if(!deleted){
+      const data=await res.json().catch(()=>null);
+      if(data&&data.gcal_event_id){
+        const b=blocks.find(x=>String(x.id)===String(block.id));
+        if(b){b.gcal_event_id=data.gcal_event_id;saveB();}
+      }
+    }
+  }catch(e){/* offline หรือ n8n ไม่ตอบ — ไม่บล็อก UI */}
 }
 
 /* ── NOTIFICATION SCHEDULER ── */
