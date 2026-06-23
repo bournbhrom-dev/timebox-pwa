@@ -1178,7 +1178,7 @@ async function syncToCloud(){
   try{
     const now=new Date().toISOString();
     // 1) sync แต่ละ block เป็น row ของตัวเอง (upsert)
-    const rows=blocks.filter(b=>b.id&&String(b.id)!=='undefined').map(b=>({id:String(b.id),block:b,deleted:false,updated_at:now}));
+    const rows=blocks.filter(b=>b.id&&String(b.id)!=='undefined'&&!_localTombstones[String(b.id)]).map(b=>({id:String(b.id),block:b,deleted:false,updated_at:now}));
     if(rows.length){
       await fetch(`${SYNC_BASE}/tb_blocks`,{
         method:'POST',
@@ -1246,6 +1246,7 @@ function mergeCloudBlocks(cloudRows){
   blocks.forEach(b=>{localById[String(b.id)]=b;});
   cloudRows.forEach(row=>{
     if(!row.id||row.id==='undefined'||row.id==='null')return; // skip invalid id
+    if(_localTombstones[String(row.id)])return; // skip ถ้าเราลบไปแล้วในเครื่องนี้
     if(row.deleted){
       // ถูกลบจากเครื่องอื่น → ลบออกจากเครื่องนี้ด้วย (เว้นแต่กำลังรัน timer อยู่ ป้องกัน race condition ตัวเอง)
       const existing=localById[row.id];
