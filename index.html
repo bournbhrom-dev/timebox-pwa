@@ -1189,7 +1189,7 @@ async function syncToCloud(){
     // 2) sync tombstones (block ที่ถูกลบ) ให้เครื่องอื่นรู้ว่าต้องลบด้วย
     const tombIds=Object.keys(_localTombstones);
     if(tombIds.length){
-      const tombRows=tombIds.map(id=>({id,block:{id},deleted:true,updated_at:now}));
+      const tombRows=tombIds.map(id=>({id,deleted:true,updated_at:now}));
       await fetch(`${SYNC_BASE}/tb_blocks`,{
         method:'POST',
         headers:{'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},
