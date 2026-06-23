@@ -1178,7 +1178,7 @@ async function syncToCloud(){
   try{
     const now=new Date().toISOString();
     // 1) sync แต่ละ block เป็น row ของตัวเอง (upsert)
-    const rows=blocks.map(b=>({id:String(b.id),block:b,deleted:false,updated_at:now}));
+    const rows=blocks.filter(b=>b.id&&String(b.id)!=='undefined').map(b=>({id:String(b.id),block:b,deleted:false,updated_at:now}));
     if(rows.length){
       await fetch(`${SYNC_BASE}/tb_blocks`,{
         method:'POST',
@@ -1189,7 +1189,7 @@ async function syncToCloud(){
     // 2) sync tombstones (block ที่ถูกลบ) ให้เครื่องอื่นรู้ว่าต้องลบด้วย
     const tombIds=Object.keys(_localTombstones);
     if(tombIds.length){
-      const tombRows=tombIds.map(id=>({id,deleted:true,updated_at:now}));
+      const tombRows=tombIds.map(id=>({id,block:{id},deleted:true,updated_at:now}));
       await fetch(`${SYNC_BASE}/tb_blocks`,{
         method:'POST',
         headers:{'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},
@@ -1245,6 +1245,7 @@ function mergeCloudBlocks(cloudRows){
   const localById={};
   blocks.forEach(b=>{localById[String(b.id)]=b;});
   cloudRows.forEach(row=>{
+    if(!row.id||row.id==='undefined'||row.id==='null')return; // skip invalid id
     if(row.deleted){
       // ถูกลบจากเครื่องอื่น → ลบออกจากเครื่องนี้ด้วย (เว้นแต่กำลังรัน timer อยู่ ป้องกัน race condition ตัวเอง)
       const existing=localById[row.id];
