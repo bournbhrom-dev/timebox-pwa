@@ -1668,7 +1668,8 @@ function saveBlock(){
     if(repeat!=='none'){newB.repeat=repeat;generateRecurring(newB);}
     syncBlockToCalendar(newB,false);
   }
-  blocks.sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start));
+  blocks=blocks.filter(b=>b&&b.id&&String(b.id)!=='undefined');
+  blocks.sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.start||'').localeCompare(b.start||''));
   saveB();closeSheet();
   if(targetDate!==dk(vDate)){vDate=dtd(targetDate);}
   renderAll();
